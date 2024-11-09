@@ -1,0 +1,6 @@
+Vehicle ID,x-coordinate,y-coordinate,Task Size (MB),Computing Cycles,Latency (ms),CPU Power (GHz),Battery Level (%),Local Processing (%),RSU Offload (%),Vehicle Offload (%),Speed (km/h),RSU1 x-coordinate,RSU1 y-coordinate,RSU2 x-coordinate,RSU2 y-coordinate
+V1,10,15,500,1000,200,2.0,60,40,30,30,50,40,50,70,20
+V2,12,18,800,1500,250,2.5,70,50,40,10,60,40,50,70,20
+V3,14,10,1000,2000,300,3.0,80,70,20,10,55,40,50,70,20
+V4,20,25,600,1200,220,1.8,40,60,20,20,70,40,50,70,20
+V5,30,35,500,1000,180,2.0,85,80,10,10,50,40,50,70,20
