@@ -250,10 +250,9 @@ class CarAgent(Agent):
         self.gap_top_y = self.center_y + self.gap_size / 2
         self.gap_bottom_y = self.center_y - self.gap_size / 2    
     
-    def move(self):
+    def move_forward(self):
         """
-        Updates the agent's position based on its current speed and direction.
-
+        Moves the agent forward based on its current speed and direction.
         The position is incremented by the value of the speed scaled by a small time delta.
         """
         delta_time = 0.1  # Smaller time steps for smoother movement
@@ -262,15 +261,14 @@ class CarAgent(Agent):
         position_array[0] += speed_value  # Move along the x-axis
         self.position = tuple(position_array)
 
-
-    def update(self):
+    def update_position(self):
         """
         Main update function called each simulation step. Manages position updates and interaction with the leader.
         """
         if self.leader:
             self.follow_leader()
         else:
-            self.move()
+            self.move_forward()
         
         # Ensure the position is within lane boundaries after any adjustments
         if not self.is_within_lane(*self.position):
@@ -280,7 +278,6 @@ class CarAgent(Agent):
         """
         Modifies the agent's behavior to follow a leader while maintaining a safe following distance.
         """
-        # Calculate the direction to the leader and the distance
         leader_pos = np.array(self.leader.position)
         my_pos = np.array(self.position)
         direction_to_leader = leader_pos - my_pos
@@ -292,18 +289,15 @@ class CarAgent(Agent):
             move_step = normalized_direction * self.speed
             projected_x, projected_y = my_pos + move_step
             # Validate the new position
-            self.position = self.get_valid_position(projected_x, projected_y, 0, 0)
+            self.position = self.get_valid_position(projected_x, projected_y)
         else:
             # Adjust speed or maintain current position to match leader's speed
             self.speed = self.leader.speed
 
-    def get_valid_position(self, current_x, current_y, delta_x, delta_y):
+    def get_valid_position(self, projected_x, projected_y):
         """
         Calculate the next valid position ensuring it does not exceed road boundaries.
         """
-        projected_x = current_x + delta_x
-        projected_y = current_y + delta_y
-
         # Ensure the proposed position is within the road boundaries
         return self.adjust_position_within_bounds(projected_x, projected_y)
 
@@ -312,7 +306,7 @@ class CarAgent(Agent):
         Checks if the given position (x, y) is within the allowed lane boundaries.
         """
         return self.left_x + self.lane_width <= x <= self.right_x - self.lane_width and \
-               self.bottom_y + self.lane_width <= y <= self.top_y - self.lane_width
+            self.bottom_y + self.lane_width <= y <= self.top_y - self.lane_width
 
     def adjust_position_within_bounds(self, x, y):
         """
@@ -321,6 +315,7 @@ class CarAgent(Agent):
         adjusted_x = np.clip(x, self.left_x, self.right_x)
         adjusted_y = np.clip(y, self.bottom_y, self.top_y)
         return adjusted_x, adjusted_y
+
        
     def stable_matching(self, agent, channels, preferences):
         channel_rank = {}
@@ -391,63 +386,172 @@ class CarAgent(Agent):
 
         self.assigned_channel = allocation[agent]
     
-    def proportional_power_algorithm(self, user_index, priorities, weights, gain_matrix, max_power):
-        """
-        Calculates the optimal power allocation based on priorities, weights, and gain matrix.
-
-        Parameters:
-        - user_index (int): Identifier for the current user (agent) to calculate power allocation for.
-        - priorities (list): List of priority values for each agent.
-        - weights (list): List indicating the load on each channel.
-        - gain_matrix (dict): Dictionary mapping (user, channel) tuples to channel gains.
-        - max_power (float): The maximum power that can be allocated.
-
-        Returns:
-        - optimal_power (float): The optimal power allocation for the agent.
-        """
-        # Validate user_index
-        if user_index is None or not isinstance(user_index, int) or user_index < 0 or user_index >= len(priorities):
-            return max_power
-
-        s = weights[user_index]  # Current user's weight
-        t = weights[user_index - 1] if user_index > 0 else None  # Previous user's weight
-
-        if user_index == 0 or t is None or s >= t:
-            return max_power
-
-        # Assuming 's' and 't' are channel indices or identifiers
-        # Ensure that 's' and 't' are valid channels
-        current_channel = self.channels[s] if s < len(self.channels) else None
-        previous_channel = self.channels[t] if t < len(self.channels) else None
-
-        if current_channel and (user_index, current_channel.frequency) in gain_matrix:
-            gain_uu_s = gain_matrix[(user_index, current_channel.frequency)]
+    def proportional_fair_allocation(self, agent):
+        # Calculate priority based on inverse of current SNR
+        if agent.snr > 0:
+            priority = 1.0 / agent.snr
+            # Calculate proportional power based on priority
+            allocated_power = (priority / priority) * self.power  # As there's only one agent, it gets all the allocated power
+            # Ensure no agent is allocated more than its maximum allowed power
+            allocated_power = min(allocated_power, agent.power)
         else:
-            gain_uu_s = 0  # Default or handle appropriately
+            allocated_power = 0  # Assign no power if no valid SNR is found
 
-        if previous_channel and (user_index, previous_channel.frequency) in gain_matrix:
-            gain_uu_t = gain_matrix[(user_index, previous_channel.frequency)]
+        return allocated_power
+
+    def update_power_settings(self):
+        # Check if assigned_power is a list or numpy array and process accordingly
+        if isinstance(self.assigned_power, (list, np.ndarray)) and len(self.assigned_power) > 0:
+            # Calculate SNR for each power value
+            self.snr = [10 * np.log10(power) if power > 0 else 0 for power in self.assigned_power]
         else:
-            gain_uu_t = 0  # Default or handle appropriately
+            # Handle the case where assigned_power is a single value
+            if self.assigned_power > 0:
+                self.snr = 10 * np.log10(self.assigned_power)  # Convert power to dB
+            else:
+                self.snr = 0  # Minimal SNR if no power is allocated
 
-        # Prevent division by zero
-        if (s - t) == 0:
-            optimal_power = max_power
-        else:
-            optimal_power = (t * gain_uu_s - s * gain_uu_t) / (s - t)
-            optimal_power = max(0, min(optimal_power, max_power))
-
-        return optimal_power
-
-
-    def assign_power(self, method, priorities, weights, gain_matrix, max_power):
-        if method == 'Proportional Power':
-            user_index = self.index
-            optimal_power = self.proportional_power_algorithm(user_index, priorities, weights, gain_matrix, max_power)
-            self.power = optimal_power
-        else:
-            raise ValueError("Invalid method. Must be 'Proportional Power'")
     
+    def blca_algorithm(self):
+        """
+        Proposed BLCA Algorithm with Optimal Resource Allocation.
+        
+        Parameters:
+            sigma (float): Step size for updates.
+            Uk (list): Set of IoT devices in each community.
+            N (list): Set of channels.
+            K (list): Set of communities.
+            lambd (float): Convergence threshold.
+            S (int): Some parameter related to task computation (could be resource slots or service tasks).
+            pmax (float): Maximum power limit for each device.
+            t_max (int): Maximum number of iterations.
+            
+        Returns:
+            np.ndarray: Optimized power allocation vector (p).
+        """
+        
+        # Step size for updates
+        sigma = 0.01
+
+        # Set of IoT devices in each community (list of device IDs or indices)
+        Uk = [0, 1, 2, 3, 4]
+
+        # Set of channels (list of channel indices)
+        N = [0, 1, 2]
+
+        # Set of communities (list of community indices or names)
+        K = [0, 1]
+
+        # Convergence threshold
+        lambd = 0.001
+
+        # Resource slots or service tasks (S is assumed as a total number of tasks or slots available)
+        S = 10
+
+        # Maximum power limit for each device (assuming a maximum of 1 watt per device)
+        pmax = 1.0
+
+        # Maximum number of iterations
+        t_max = 100
+
+        # Initializations
+        i = 1
+        convergence = False
+        P_bar = np.zeros(len(Uk))  # Initial power allocation vector
+
+        # Random initial feasible values
+        phi = np.random.rand(len(Uk))  # Initial phase shifts
+        b = np.random.rand(len(N))     # Initial bandwidth allocation
+        p = np.random.rand(len(Uk)) * pmax  # Initial power allocation
+
+        # Define placeholder methods
+        def solve_phase_shifts(b, p):
+            return np.random.rand(len(b))  # Placeholder 
+
+        def select_best_abs(phi):
+            pass  # Placeholder
+
+        def bisection_algorithm(b):
+            return np.clip(b, 0, 1)  # Placeholder for bandwidth allocation within [0, 1]
+
+        def solve_power_allocation(phi, b):
+            # Compute a stable power allocation by incorporating phi and b weights.
+            base_power = np.clip(phi * b, 0.1, 1)  # Adjust range as needed
+            stable_power = (base_power / np.sum(base_power)) * self.power
+            return stable_power
+
+
+        def water_filling(p, pmax):
+            total_power = np.sum(p)
+            if total_power > pmax:
+                p = (p / total_power) * pmax  # Scale down to match pmax
+            return np.minimum(p, pmax)  # Ensure individual power levels don’t exceed pmax
+
+        def allocate_power_to_abs_links(p):
+            pass  # Placeholder
+
+        def distribute_power_to_iot_devices(p, K):
+            return np.clip(p, 0, pmax)  # Placeholder
+
+        def compute_gradient(p, Uk):
+            return np.random.randn(len(Uk))  # Placeholder
+
+        def allocate_final_power_to_iot_devices(p, k):
+            pass  # Placeholder
+
+        # Main algorithm loop
+        while not convergence and i <= t_max:
+            # Step 5: Solve for phi with fixed b and p
+            phi = solve_phase_shifts(b, p)
+            
+            # Step 6: Select best cooperative ABSs based on some metric (Equation 14)
+            select_best_abs(phi)
+            
+            # Step 7: Solve for bandwidth allocation using a bisection-based algorithm
+            b = bisection_algorithm(b)
+            
+            # Step 8: Solve for power allocation with fixed phi and b
+            p = solve_power_allocation(phi, b)
+            
+            # Step 9: Distribute power using a water-filling algorithm
+            p = water_filling(p, pmax)
+            
+            # Step 10: Allocate power to the cooperative ABS communication link
+            allocate_power_to_abs_links(p)
+            
+            # Step 11: Distribute power to IoT devices within the community
+            p = distribute_power_to_iot_devices(p, K)
+            
+            # Convergence Check (Step 12-16)
+            P_bar_prime = P_bar + sigma * compute_gradient(p, Uk)  # Update with gradient
+            if np.linalg.norm(P_bar_prime - P_bar) <= lambd:
+                convergence = True
+            else:
+                P_bar = 0.9 * P_bar + 0.1 * P_bar_prime
+                P_bar = np.clip(P_bar, 0, pmax)  
+                i += 1
+
+        # Final Power Allocation for IoT devices (Step 17-18)
+        for k in K:
+            allocate_final_power_to_iot_devices(p, k)
+
+        # Only return the optimized power allocation
+        return p
+
+
+    
+    def assign_power(self, agent, method='Proportional'):
+        if method == 'Proportional':
+            allocated_power = self.proportional_fair_allocation(agent)
+        elif method == 'BLCA':  # Placeholder for another method
+            allocated_power = self.blca_algorithm()
+        else:
+            raise ValueError("Unsupported power allocation method.")
+
+        # Assign calculated power and update agent settings
+        agent.assigned_power = allocated_power
+        agent.update_power_settings()  # This method should be implemented in the agent class
+        
     def calculate_distance_to_rsu(self, rsu):
         """
         Calculates the Euclidean distance from the agent to a Road-Side Unit (RSU).
@@ -475,11 +579,11 @@ class CarAgent(Agent):
         - channel_gain (float): The calculated channel gain.
         """
         # Path-loss model parameters
-        path_loss_exponent = 2.0  
-        reference_distance = 1.0  # in meters
+        path_loss_exponent = 3.0
+        reference_distance = 1.0   # in meters
         reference_gain = 1.0       # Normalized reference gain
         min_gain = 0.01            # Minimum channel gain to prevent zero gain
-        max_gain = 100.0           # Maximum channel gain for zero or invalid distance
+        max_gain = 100.0 
         
         if isinstance(distance, (int, float)) and distance > 0:
             channel_gain = reference_gain * (reference_distance / distance) ** path_loss_exponent
@@ -633,31 +737,6 @@ class IntersectionEnvironment:
         return clipped_reward.item()
 
 class IoVScenario(BaseScenario):
-    """
-    Represents a scenario for Intelligent Vehicle Operations (IoV) where multiple vehicles, 
-    defined by platoons and individual cars, operate in a simulated environment with specific
-    communication channels. This scenario is designed to simulate and analyze the behaviors 
-    and interactions of these vehicles under various traffic conditions and communication constraints.
-
-    Attributes:
-        num_platoons (int): The number of platoons in the scenario.
-        cars_per_platoon (int): The number of cars in each platoon.
-        channels (list): A list of communication channels available for the vehicles.
-        width (float): The width of the scenario area or lanes, derived from kwargs.
-        length (float): The length of the scenario area or lanes, derived from kwargs.
-        max_steering_angle (torch.Tensor): The maximum steering angle for vehicle dynamics, in radians.
-        max_speed (float): The maximum speed limit for vehicles in the scenario.
-        intersection (IntersectionEnvironment): A simulated intersection environment where vehicle interactions occur.
-        agents (list): A list of agents (vehicles) that are active within the scenario.
-        dataset (DataFrame): A dataset loaded from a CSV file that contains initial configurations or data for the vehicles.
-
-    Parameters:
-        num_platoons (int): Number of platoons in the simulation.
-        cars_per_platoon (int): Number of cars per platoon.
-        channels (list): Communication channels available to the vehicles.
-        dataset_path (str): Path to the CSV file containing vehicle data.
-        kwargs (dict): Additional keyword arguments for scenario dimensions or other settings.
-    """
     def __init__(self, num_agents, cars_per_platoon, channels, dataset, **kwargs):
         super().__init__(**kwargs)
         self.num_agents = num_agents
@@ -666,15 +745,16 @@ class IoVScenario(BaseScenario):
         self.intersection = IntersectionEnvironment()
         self.agents = []
         self.dataset = dataset
+        self.platoons = []  # Initialize an empty list for platoons
 
     def make_world(self, batch_dim, device, **kwargs):
         world = World(batch_dim, device, substeps=10, collision_force=500)
         directions = ['north', 'south', 'east', 'west']
         direction_angles = {
-            'north': 90,  # North should have a direction angle of 90 degrees
-            'south': 270,  # South - 270 degrees
-            'east': 0,  # East - 0 degrees
-            'west': 180  # West - 180 degrees
+            'north': 90,
+            'south': 270,
+            'east': 0,
+            'west': 180
         }
 
         agent_index = 0
@@ -686,9 +766,9 @@ class IoVScenario(BaseScenario):
                 direction_angle = direction_angles[direction]
                 agent = CarAgent(
                     index=agent_index,
-                    position=[0,0],
+                    position=[0, 0],
                     speed=row['Speed (km/h)'] / 3600.0,  # Convert speed from km/h to m/s
-                    direction_angle=direction_angle,  # Set the direction angle based on the movement direction
+                    direction_angle=direction_angle,
                     name=str(row['Vehicle ID']),
                     power=row['CPU Power (GHz)'],
                     snr=None,
@@ -701,11 +781,59 @@ class IoVScenario(BaseScenario):
                     direction=direction
                 )
                 if index == 0:
-                    leader = agent  # Set the first agent as the leader if applicable
+                    leader = agent
                 world.add_agent(agent)
                 self.agents.append(agent)
                 agent_index += 1
+
+        # Initialize platoons after all agents are created
+        self.platoons = self.form_platoons(self.agents, num_clusters=self.cars_per_platoon)
         return world
+
+    def form_platoons(self, vehicles, num_clusters):
+        centroids = self.calculate_centroids(vehicles, num_clusters)
+        for _ in range(100):
+            platoons = self.assign_vehicles_to_platoons(vehicles, centroids)
+            new_centroids = self.update_centroids(platoons)
+            if all(np.array_equal(cent.position, new_cent.position) for cent, new_cent in zip(centroids, new_centroids)):
+                break
+            centroids = new_centroids
+        return platoons
+
+    def calculate_centroids(self, vehicles, num_clusters):
+        return np.random.choice(vehicles, size=num_clusters, replace=False)
+
+    def assign_vehicles_to_platoons(self, vehicles, centroids):
+        platoons = [[] for _ in centroids]
+        for vehicle in vehicles:
+            distances = [np.linalg.norm(vehicle.position - centroid.position) for centroid in centroids]
+            closest_centroid_idx = np.argmin(distances)
+            platoons[closest_centroid_idx].append(vehicle)
+        return platoons
+
+    def update_centroids(self, platoons):
+        new_centroids = []
+        for platoon in platoons:
+            if platoon:
+                centroid_position = np.mean([vehicle.position for vehicle in platoon], axis=0)
+                # Create a new centroid vehicle with default values for speed and direction_angle
+                new_centroids.append(CarAgent(
+                    index=-1,  # Use -1 or any suitable placeholder for centroid index
+                    position=centroid_position,
+                    speed=0,  # Centroids do not move, hence speed is 0
+                    direction_angle=0,  # Direction angle is irrelevant for centroids
+                    name="Centroid",
+                    power=0,  # No power requirement for centroids
+                    channels=[],  # No channels needed for centroids
+                    channel_gain=0,  # No channel gain for centroids
+                    snr=0,  # No signal-to-noise ratio for centroids
+                    rate=0,  # No rate needed for centroids
+                    leader=None,  # No leader for centroids
+                    distance=0,  # No distance calculation needed
+                    world=None,  # No world interaction required
+                    direction=None  # No specific direction required
+                ))
+        return new_centroids
 
     def reset_world_at(self, env_index=None):
         ScenarioUtils.spawn_entities_randomly(
@@ -728,12 +856,12 @@ class IoVScenario(BaseScenario):
         geoms = []
     
         # Define parameters for the squares and roads
-        square_size = 1.5 # Half-size of the total area
-        gap_size = 1.5     # Size of the gap in the center (intersection area)
+        square_size = 2 # Half-size of the total area
+        gap_size = 2     # Size of the gap in the center (intersection area)
         road_width = 0.4  # Width of the roads (adjusted for better visibility)
         dash_length = 0.1
         gap_length = 0.06
-        rsu_radius = 0.25
+        rsu_radius = 0.15
     
         # Define the center position
         center_x = 0
@@ -807,14 +935,18 @@ class IoVScenario(BaseScenario):
         for agent in self.agents:
             if hasattr(agent, 'channel_gain') and agent.channel_gain is not None:
                 # Prepare the text to display
+                power_value = (
+                    f"{float(agent.assigned_power[0]):.2f}" if isinstance(agent.assigned_power, (list, np.ndarray)) else f"{float(agent.assigned_power):.2f}"
+                )
+
                 info_text = (
-                    f"{agent.name}:G {agent.channel_gain:.2f},"
+                    f"{agent.name}: G {agent.channel_gain:.2f}, "
                     f"SNR {agent.snr:.2f} dB, Rate {agent.rate:.2f} Mbps, "
-                    f"Dist {agent.distance:.2f} m, "
-                    f"P {agent.power:.2f} Watts, Ch {agent.assigned_channel.frequency} GHz,"
+                    f"D-RSU {agent.distance:.2f} m, "
+                    f"P {power_value} Watts, Ch {agent.assigned_channel.frequency} GHz, "
                     f"Mode: {agent.transmission_mode}"
                 )
-    
+                    
                 # Create text geometry
                 geom = rendering.TextLine(
                     text=info_text,
@@ -825,8 +957,10 @@ class IoVScenario(BaseScenario):
                 xform = rendering.Transform()
                 geom.add_attr(xform)
                 geoms.append(geom)
+                
                 # Increment the y-offset for the next line of text
                 y_offset += line_height
+
     
         # Draw dashed lines for roads in four directions
     
@@ -897,7 +1031,7 @@ class IoVScenario(BaseScenario):
         # RSU at top-left corner
         rsu_circle = rendering.make_circle(radius=rsu_radius, filled=True)
         rsu_transform = rendering.Transform(
-            translation=(center_x - square_size / 2.5 - arm_length, center_y + square_size / 2.5 + arm_length)
+            translation=(center_x - square_size / 2.7 - arm_length, center_y + square_size / 2.7 + arm_length)
         )
         rsu_circle.add_attr(rsu_transform)
         rsu_circle.set_color(0.8, 0, 0)  # Red color for RSU
@@ -905,8 +1039,8 @@ class IoVScenario(BaseScenario):
 
         rsu_text = rendering.TextLine(
             text="RSU",
-            x=65,
-            y=600,
+            x=35,
+            y=635,
             font_size=12
         )
         rsu_text_transform = rendering.Transform()
@@ -1022,7 +1156,7 @@ class IoVEnvironment:
         # Apply actions to each agent
         for agent, action in zip(self.environment.scenario.agents, actions):
             agent.speed = action  # Assuming each action represents a new speed
-            agent.move()  # Update position based on new speed
+            agent.move_forward()  # Update position based on new speed
 
         # Initialize priorities, weights, and gain_matrix for the power allocation algorithm
         priorities = [channel.priority for channel in self.channels]  # Replace with actual priority values
@@ -1040,11 +1174,8 @@ class IoVEnvironment:
                     
                     # Pass all required arguments to allocate_power
                     agent.assign_power(
+                        agent,
                         power_mode,
-                        priorities=priorities,
-                        weights=weights,
-                        gain_matrix=gain_matrix,
-                        max_power=max_power
                     )
                     # Update agent metrics based on newly assigned channel and power
                     distance = agent.calculate_distance_to_rsu(rsu)

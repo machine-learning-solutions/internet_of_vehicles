@@ -23,7 +23,7 @@ mode_var = tk.StringVar()
 
 power_label = ttk.Label(frame, text="Power Allocation Algorithm:")
 power_label.pack(pady=(10, 0))  # Add some vertical padding for spacing
-power_dropdown = ttk.Combobox(frame, textvariable=power_var, values=['Proportional Power',])
+power_dropdown = ttk.Combobox(frame, textvariable=power_var, values=['Proportional','BLCA',])
 power_dropdown.pack()
 
 channel_label = ttk.Label(frame, text="Channel Allocation Algorithm:")
