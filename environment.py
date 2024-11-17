@@ -197,7 +197,11 @@ class CarAgent(Agent):
         leader=None,
         distance=0,
         world=None,
-        direction=None
+        direction=None,
+        safe_distance = 2,
+        scenario = None,
+        rsus = None
+        
     ):
         """
         Initializes the CarAgent with position, speed, communication parameters, and optional leader.
@@ -229,7 +233,10 @@ class CarAgent(Agent):
         self.noise_level = 1e-14 
         self.leader = leader
         self.distance = distance 
-        self.max_rate = rate  
+        self.max_rate = rate
+        self.safe_distance = safe_distance 
+        self.scenario = scenario 
+        self.rsus = rsus
         self.init_spacing()
    
     def init_spacing(self):
@@ -282,7 +289,7 @@ class CarAgent(Agent):
         my_pos = np.array(self.position)
         direction_to_leader = leader_pos - my_pos
         distance_to_leader = np.linalg.norm(direction_to_leader)
-        
+
         # Move towards the leader if further away than the safe following distance
         if distance_to_leader > self.safe_distance:
             normalized_direction = direction_to_leader / distance_to_leader
@@ -412,146 +419,166 @@ class CarAgent(Agent):
                 self.snr = 0  # Minimal SNR if no power is allocated
 
     
-    def blca_algorithm(self):
+    def blca_algorithm(self, channels):
         """
         Proposed BLCA Algorithm with Optimal Resource Allocation.
-        
-        Parameters:
-            sigma (float): Step size for updates.
-            Uk (list): Set of IoT devices in each community.
-            N (list): Set of channels.
-            K (list): Set of communities.
-            lambd (float): Convergence threshold.
-            S (int): Some parameter related to task computation (could be resource slots or service tasks).
-            pmax (float): Maximum power limit for each device.
-            t_max (int): Maximum number of iterations.
-            
-        Returns:
-            np.ndarray: Optimized power allocation vector (p).
         """
-        
-        # Step size for updates
+        # Constants and Initialization
         sigma = 0.01
-
-        # Set of IoT devices in each community (list of device IDs or indices)
-        Uk = [0, 1, 2, 3, 4]
-
-        # Set of channels (list of channel indices)
-        N = [0, 1, 2]
-
-        # Set of communities (list of community indices or names)
-        K = [0, 1]
-
-        # Convergence threshold
+        Uk = [0, 1, 2, 3, 4]  # Example device IDs
+        K = [0, 1]  # Community indices
         lambd = 0.001
-
-        # Resource slots or service tasks (S is assumed as a total number of tasks or slots available)
-        S = 10
-
-        # Maximum power limit for each device (assuming a maximum of 1 watt per device)
-        pmax = 1.0
-
-        # Maximum number of iterations
+        S = 10  # Total resource slots
+        pmax = 1.0  # Max power per device
         t_max = 100
-
-        # Initializations
         i = 1
         convergence = False
-        P_bar = np.zeros(len(Uk))  # Initial power allocation vector
+        P_bar = np.zeros(len(Uk))
 
-        # Random initial feasible values
-        phi = np.random.rand(len(Uk))  # Initial phase shifts
-        b = np.random.rand(len(N))     # Initial bandwidth allocation
-        p = np.random.rand(len(Uk)) * pmax  # Initial power allocation
+        # Initial feasible values for power and bandwidth
+        phi = np.random.rand(len(Uk))  # Phase shifts
+        p = np.random.rand(len(Uk)) * pmax  # Power allocation per device
 
-        # Define placeholder methods
+        # Bandwidth allocation assuming each device is matched with a channel
+        # If fewer channels than devices, cycle the available channels
+        if len(channels) < len(Uk):
+            b = np.random.rand(len(Uk))  # Adjust to cycle through available channels
+        else:
+            b = np.random.rand(len(channels))[:len(Uk)]  # Direct match if channels are sufficient
+
+        # Function Definitions
         def solve_phase_shifts(b, p):
-            return np.random.rand(len(b))  # Placeholder 
+            if len(b) != len(p):
+                raise ValueError("Bandwidth and power arrays must be of the same length.")
+            signal_quality = np.sqrt(b * p)
+            signal_quality_normalized = signal_quality / np.max(signal_quality)
+            phase_shifts = 2 * np.pi * signal_quality_normalized
+            return phase_shifts
 
-        def select_best_abs(phi):
-            pass  # Placeholder
+        def select_best_abs(phi, agents, abs_list):
+            best_abs = {}
+            for index, agent in enumerate(agents):
+                agent_position_tensor = torch.tensor(agent.position, dtype=torch.float32)
+                abs_scores = {abs: torch.norm(agent_position_tensor - abs.position) * phi[index] for abs in abs_list}
+                best_abs[agent] = min(abs_scores, key=abs_scores.get)
+            return best_abs
 
         def bisection_algorithm(b):
             return np.clip(b, 0, 1)  # Placeholder for bandwidth allocation within [0, 1]
 
         def solve_power_allocation(phi, b):
-            # Compute a stable power allocation by incorporating phi and b weights.
-            base_power = np.clip(phi * b, 0.1, 1)  # Adjust range as needed
-            stable_power = (base_power / np.sum(base_power)) * self.power
+            base_power = np.clip(phi * b, 0.1, 1)
+            stable_power = (base_power / np.sum(base_power)) * pmax
             return stable_power
-
 
         def water_filling(p, pmax):
             total_power = np.sum(p)
-            if total_power > pmax:
-                p = (p / total_power) * pmax  # Scale down to match pmax
-            return np.minimum(p, pmax)  # Ensure individual power levels don’t exceed pmax
+            return np.minimum(p / total_power * pmax, pmax)
 
-        def allocate_power_to_abs_links(p):
-            pass  # Placeholder
+        def allocate_power_to_abs_links(p, agents, abs_allocation, pmax):
+            power_allocation = {}
+            total_demand = sum(p)
+            normalized_power = p / total_demand if total_demand > 0 else np.zeros_like(p)
+            for agent, power_ratio in zip(agents, normalized_power):
+                assigned_abs = abs_allocation[agent]
+                allocated_power = min(power_ratio * pmax, pmax / len(agents))
+                power_allocation[agent] = allocated_power
+            return power_allocation
+
+        def compute_gradient(p, Uk, desired_power):
+            """
+            Computes the gradient of the power allocation vector.
+            
+            Parameters:
+            - p (np.array): Current power allocations for each device.
+            - Uk (list): Indices or identifiers of IoT devices.
+            - desired_power (float): Target or desired power allocation level for optimization.
+            
+            Returns:
+            - np.array: Gradient of the power allocation.
+            """
+            # Compute the gradient as the difference from the desired power level
+            gradient = np.zeros_like(p)
+            for i in range(len(Uk)):
+                # Simple gradient: difference between current and desired power
+                gradient[i] = p[i] - desired_power
+
+            # Alternatively, more complex utility-based gradients could be used
+            # For instance, gradient could be derived from a utility function U(p) like:
+            # gradient[i] = -dU/dp = -d/dp(p^2 - 2*desired_power*p + constant)
+            # which simplifies to: -2*(p - desired_power)
+            
+            return gradient
 
         def distribute_power_to_iot_devices(p, K):
-            return np.clip(p, 0, pmax)  # Placeholder
+            """
+            Distributes power to IoT devices based on community needs.
+            
+            Parameters:
+            - p (np.array): Array of power allocations for each device.
+            - K (list): List of community indices or names.
+            
+            Returns:
+            - np.array: Adjusted power allocations after distribution.
+            """
+            # Initialize a power distribution array of the same size as p, initially set to zero.
+            distributed_power = np.zeros_like(p)
+            
+            # Number of devices per community (assuming uniform distribution for simplicity)
+            num_devices_per_community = len(p) // len(K)
+            
+            # Distribute power equally within each community
+            for k in K:
+                # Index slice for the community
+                start_idx = k * num_devices_per_community
+                end_idx = start_idx + num_devices_per_community
+                
+                # Sum of all power allocations in this community slice
+                total_power_in_community = np.sum(p[start_idx:end_idx])
+                
+                # If total power in community is greater than max allowed, scale it down
+                if total_power_in_community > pmax:
+                    scaling_factor = pmax / total_power_in_community
+                    distributed_power[start_idx:end_idx] = p[start_idx:end_idx] * scaling_factor
+                else:
+                    distributed_power[start_idx:end_idx] = p[start_idx:end_idx]
+            
+            return distributed_power
 
-        def compute_gradient(p, Uk):
-            return np.random.randn(len(Uk))  # Placeholder
 
-        def allocate_final_power_to_iot_devices(p, k):
-            pass  # Placeholder
-
-        # Main algorithm loop
+        # Algorithm Execution Loop
+        agents = self.scenario.agents
+        abs_list = self.rsus
         while not convergence and i <= t_max:
-            # Step 5: Solve for phi with fixed b and p
             phi = solve_phase_shifts(b, p)
-            
-            # Step 6: Select best cooperative ABSs based on some metric (Equation 14)
-            select_best_abs(phi)
-            
-            # Step 7: Solve for bandwidth allocation using a bisection-based algorithm
+            best_abs_allocation = select_best_abs(phi, agents, abs_list)
             b = bisection_algorithm(b)
-            
-            # Step 8: Solve for power allocation with fixed phi and b
             p = solve_power_allocation(phi, b)
-            
-            # Step 9: Distribute power using a water-filling algorithm
             p = water_filling(p, pmax)
-            
-            # Step 10: Allocate power to the cooperative ABS communication link
-            allocate_power_to_abs_links(p)
-            
-            # Step 11: Distribute power to IoT devices within the community
+            allocate_power_to_abs_links(p, agents, best_abs_allocation, pmax)
             p = distribute_power_to_iot_devices(p, K)
-            
-            # Convergence Check (Step 12-16)
-            P_bar_prime = P_bar + sigma * compute_gradient(p, Uk)  # Update with gradient
+            P_bar_prime = P_bar + sigma * compute_gradient(p, Uk, 1)
             if np.linalg.norm(P_bar_prime - P_bar) <= lambd:
                 convergence = True
             else:
                 P_bar = 0.9 * P_bar + 0.1 * P_bar_prime
-                P_bar = np.clip(P_bar, 0, pmax)  
+                P_bar = np.clip(P_bar, 0, pmax)
                 i += 1
 
-        # Final Power Allocation for IoT devices (Step 17-18)
-        for k in K:
-            allocate_final_power_to_iot_devices(p, k)
-
-        # Only return the optimized power allocation
         return p
 
-
-    
-    def assign_power(self, agent, method='Proportional'):
+    def assign_power(self, agent, method='Proportional', channels=[]):
         if method == 'Proportional':
             allocated_power = self.proportional_fair_allocation(agent)
         elif method == 'BLCA':  # Placeholder for another method
-            allocated_power = self.blca_algorithm()
+            allocated_power = self.blca_algorithm(channels)
         else:
             raise ValueError("Unsupported power allocation method.")
 
         # Assign calculated power and update agent settings
         agent.assigned_power = allocated_power
-        agent.update_power_settings()  # This method should be implemented in the agent class
-        
+        agent.update_power_settings()  
+    
     def calculate_distance_to_rsu(self, rsu):
         """
         Calculates the Euclidean distance from the agent to a Road-Side Unit (RSU).
@@ -596,7 +623,6 @@ class CarAgent(Agent):
         self.channel_gain = channel_gain
         return channel_gain
 
-
     def calculate_snr(self, channel_gain):
         """
         Calculates the Signal-to-Noise Ratio (SNR) in decibels (dB) for the agent.
@@ -638,34 +664,34 @@ class CarAgent(Agent):
         self.rate = rate
         return rate
 
-    def update_max_rate(self):
-        # Direct transmission
+    def update_rate(self, operation_mode):
+        """
+        Adjust rates based on the operation mode.
+        """
         direct_snr = self.calculate_snr(self.distance)
         direct_rate = self.calculate_rate(direct_snr)
-    
-        # Indirect transmission via leader
-        if self.leader:
+        indirect_rate = 0
+
+        if operation_mode == 'Indirect via Leader' and self.leader:
             leader_distance = self.calculate_distance_to_agent(self.leader)
             penalty_ratio = 0.95 if leader_distance < 50 else 0.85
             indirect_snr = self.leader.calculate_snr(self.leader.distance) * penalty_ratio
             indirect_rate = self.calculate_rate(indirect_snr)
+        
+        elif operation_mode == 'Indirect without Leader':
+            penalty_without_leader = 0.95 if self.distance < 100 else 0.8
+            indirect_no_leader_snr = self.snr * penalty_without_leader
+            indirect_no_leader_rate = self.calculate_rate(indirect_no_leader_snr)
         else:
-            indirect_rate = 0
-    
-        # Indirect without leader
-        penalty_without_leader = 0.95 if self.distance < 100 else 0.8
-        indirect_no_leader_snr = self.snr * penalty_without_leader
-        indirect_no_leader_rate = self.calculate_rate(indirect_no_leader_snr)
-    
-        # Choose the best mode
+            indirect_no_leader_rate = 0
+
         rates = {
             'Direct': direct_rate,
             'Indirect via Leader': indirect_rate,
             'Indirect without Leader': indirect_no_leader_rate
         }
-        self.max_rate = max(rates.values())
-        max_modes = [mode for mode, rate in rates.items() if rate == self.max_rate]
-        self.transmission_mode = max_modes[0] if max_modes else None
+        self.rate = max(rates.values())
+        self.transmission_mode = operation_mode
 
 
     def perform_task(self, task):
@@ -737,7 +763,7 @@ class IntersectionEnvironment:
         return clipped_reward.item()
 
 class IoVScenario(BaseScenario):
-    def __init__(self, num_agents, cars_per_platoon, channels, dataset, **kwargs):
+    def __init__(self, num_agents, cars_per_platoon, channels, dataset, rsus,**kwargs):
         super().__init__(**kwargs)
         self.num_agents = num_agents
         self.cars_per_platoon = cars_per_platoon
@@ -745,7 +771,8 @@ class IoVScenario(BaseScenario):
         self.intersection = IntersectionEnvironment()
         self.agents = []
         self.dataset = dataset
-        self.platoons = []  # Initialize an empty list for platoons
+        self.platoons = [] 
+        self.rsus = rsus
 
     def make_world(self, batch_dim, device, **kwargs):
         world = World(batch_dim, device, substeps=10, collision_force=500)
@@ -778,7 +805,9 @@ class IoVScenario(BaseScenario):
                     leader=leader if index > 0 else None,
                     distance=None,
                     world=world,
-                    direction=direction
+                    direction = direction,
+                    scenario = self,
+                    rsus = self.rsus
                 )
                 if index == 0:
                     leader = agent
@@ -791,6 +820,7 @@ class IoVScenario(BaseScenario):
         return world
 
     def form_platoons(self, vehicles, num_clusters):
+        
         centroids = self.calculate_centroids(vehicles, num_clusters)
         for _ in range(100):
             platoons = self.assign_vehicles_to_platoons(vehicles, centroids)
@@ -798,7 +828,18 @@ class IoVScenario(BaseScenario):
             if all(np.array_equal(cent.position, new_cent.position) for cent, new_cent in zip(centroids, new_centroids)):
                 break
             centroids = new_centroids
+      
         return platoons
+
+    def update_leadership(self):
+        for agent in self.agents:
+            # Determine the new leader based on proximity
+            possible_leaders = [a for a in self.agents if a != agent]
+            if possible_leaders:
+                # Select the leader who is closest to the current agent
+                agent.leader = min(possible_leaders, key=lambda x: np.linalg.norm(np.array(agent.position) - np.array(x.position)))
+            else:
+                agent.leader = None  # or keep the current leader if that's preferable
 
     def calculate_centroids(self, vehicles, num_clusters):
         return np.random.choice(vehicles, size=num_clusters, replace=False)
@@ -850,6 +891,7 @@ class IoVScenario(BaseScenario):
 
     def reward(self, agent):
         actions = self.collect_actions()
+        self.update_leadership()
         return self.intersection.compute_reward(actions, agent)
     
     def extra_render(self, env_index: int = 0):
@@ -1092,7 +1134,7 @@ class IoVEnvironment:
         self.cars_per_platoon = cars_per_platoon
         self.channels = channels
         self.rsus = rsus
-        self.scenario = IoVScenario(self.num_agents, self.num_platoons, self.channels, self.dataframe)  
+        self.scenario = IoVScenario(self.num_agents, self.num_platoons, self.channels, self.dataframe, rsus)  
         self.environment = make_env(
             scenario=self.scenario, 
             num_envs=1,
@@ -1136,7 +1178,7 @@ class IoVEnvironment:
         """
         self.environment.close()
         
-    def step(self, actions, channel_mode, power_mode):
+    def step(self, actions, channel_mode, power_mode, operation_mode):
         """
         Advances the environment by one time step based on the actions taken by the agents.
         This function applies the actions to the agents, updates traffic signals, and calculates the new state.
@@ -1144,6 +1186,7 @@ class IoVEnvironment:
         
         Parameters:
         - actions: A list of actions (e.g., speeds) taken by each agent.
+        - operation_mode: Operational mode for selecting direct or indirect communication.
         
         Returns:
         - next_state: The state of the environment after the step.
@@ -1156,7 +1199,6 @@ class IoVEnvironment:
         # Apply actions to each agent
         for agent, action in zip(self.environment.scenario.agents, actions):
             agent.speed = action  # Assuming each action represents a new speed
-            agent.move_forward()  # Update position based on new speed
 
         # Initialize priorities, weights, and gain_matrix for the power allocation algorithm
         priorities = [channel.priority for channel in self.channels]  # Replace with actual priority values
@@ -1172,17 +1214,24 @@ class IoVEnvironment:
                     
                     agent.assign_channel(channel_mode, agent, self.channels, data_rates)
                     
+                    if agent.leader:
+                        agent.follow_leader()
+                    else:
+                        agent.move_forward()
+
                     # Pass all required arguments to allocate_power
                     agent.assign_power(
                         agent,
                         power_mode,
+                        self.channels
                     )
+
                     # Update agent metrics based on newly assigned channel and power
                     distance = agent.calculate_distance_to_rsu(rsu)
                     channel_gain = agent.calculate_channel_gain(distance)
                     snr = agent.calculate_snr(channel_gain)
                     agent.rate = agent.calculate_rate(snr)
-                    agent.update_max_rate()
+                    agent.update_rate(operation_mode)
                     agent.perform_task('transmit')
 
         # Calculate the new state of the environment
@@ -1235,7 +1284,7 @@ class IoVEnvironment:
         return done
 
 
-def setup_environment(power_algo, channel_algo, mode, num_episodes=10000):
+def setup_environment(power_algo, channel_algo, mode, num_episodes=500):
     """
     Sets up and runs the IoV environment simulation.
 
@@ -1261,9 +1310,9 @@ def setup_environment(power_algo, channel_algo, mode, num_episodes=10000):
     env = IoVEnvironment(df, state_dim=15, action_dim=10, num_agents=2, num_platoons=2, cars_per_platoon=2, channels=channels, rsus=rsus, T_max=100)
     replay_buffer = ReplayBuffer(capacity=100000)
     
-    train_environment(df, env, rsus, num_episodes=num_episodes, channel_mode=channel_algo, replay_buffer=replay_buffer, power_mode=power_algo, operation_mode=mode)
+    train_environment(df, env, rsus, num_episodes=num_episodes, channel_mode=channel_algo, replay_buffer=replay_buffer, power_mode=power_algo, operation_mode=mode, channels=channels)
 
-def train_environment(df, env, rsus, num_episodes, channel_mode, replay_buffer, power_mode, operation_mode):
+def train_environment(df, env, rsus, num_episodes, channel_mode, replay_buffer, power_mode, operation_mode, channels):
     """
     Train the IoV environment using specified parameters.
     
@@ -1292,7 +1341,6 @@ def train_environment(df, env, rsus, num_episodes, channel_mode, replay_buffer, 
         while not done:
             # Render the environment for the current ti mestep (this will display the 3D window)
             env.render()
-            time.sleep(0.08)
             # Your training logic (actions, next states, rewards, etc.)
             state_tensor = torch.FloatTensor(state).unsqueeze(0).repeat(num_agents, 1)
             actions = np.array([actor(state_tensor[i].unsqueeze(0)).detach().cpu().numpy() for i, actor in enumerate(actors)])
@@ -1306,8 +1354,7 @@ def train_environment(df, env, rsus, num_episodes, channel_mode, replay_buffer, 
             actions += noise  # Add noise to actions
 
             # Step the environment forward
-            # next_state, reward, done = env.step(actions.sum(axis=0), channel_mode, power_mode, operation_mode)
-            next_state, reward, done = env.step(actions.sum(axis=0), channel_mode, power_mode)
+            next_state, reward, done = env.step(actions.sum(axis=0), channel_mode, power_mode, operation_mode)
             replay_buffer.add(state, next_state, actions, reward, done)
             total_reward += reward
 
@@ -1336,12 +1383,9 @@ def train_environment(df, env, rsus, num_episodes, channel_mode, replay_buffer, 
             state = next_state
 
         episode_rewards.append(total_reward)
-        if episode % 100 == 0:
+        if episode % update_target_every == 0:
             avg_loss = np.nanmean(episode_losses) if episode_losses else float('nan')
             print(f"Episode: {episode}, Reward: {total_reward}, Average Loss: {avg_loss}")
-
-    # Close the rendering window after training
-    env.close()
 
     # Plotting results
     plt.figure(figsize=(10, 5))
