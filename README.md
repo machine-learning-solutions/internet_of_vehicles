@@ -1,4 +1,4 @@
-# VMAS Simulator
+# VMAS Simulator (Mac)
 
 ## Overview
 The VMAS Simulator is a sophisticated simulation platform designed for vehicle mobility and signal transmission studies. This environment integrates advanced vehicular models and communication protocols to simulate realistic scenarios in vehicle-to-everything (V2X) interactions.
