@@ -984,9 +984,9 @@ class IoVScenario(BaseScenario):
                 info_text = (
                     f"{agent.name}: G {agent.channel_gain:.2f}, "
                     f"SNR {agent.snr:.2f} dB, Rate {agent.rate:.2f} Mbps, "
-                    f"D-RSU {agent.distance:.2f} m, "
-                    f"P {power_value} Watts, Ch {agent.assigned_channel.frequency} GHz, "
-                    f"Mode: {agent.transmission_mode}"
+                    f"D {agent.distance:.2f} m, "
+                    f"P {power_value} W, Ch {agent.assigned_channel.frequency} GHz, "
+                    f"M: {agent.transmission_mode}"
                 )
                     
                 # Create text geometry
@@ -1019,7 +1019,7 @@ class IoVScenario(BaseScenario):
                 end=(center_x, end_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0.5, 0.5, 0.5)  # Gray color
+            dash.set_color(0,0,0)  # Gray color
             geoms.append(dash)
     
         # Downward direction (negative y-axis)
@@ -1035,7 +1035,7 @@ class IoVScenario(BaseScenario):
                 end=(center_x, end_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0.5, 0.5, 0.5)
+            dash.set_color(0,0,0)
             geoms.append(dash)
     
         # Rightward direction (positive x-axis)
@@ -1051,7 +1051,7 @@ class IoVScenario(BaseScenario):
                 end=(end_x, center_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0.5, 0.5, 0.5)
+            dash.set_color(0,0,0)
             geoms.append(dash)
     
         # Leftward direction (negative x-axis)
@@ -1067,7 +1067,7 @@ class IoVScenario(BaseScenario):
                 end=(end_x, center_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0.5, 0.5, 0.5)
+            dash.set_color(0,0,0)
             geoms.append(dash)
     
         # RSU at top-left corner

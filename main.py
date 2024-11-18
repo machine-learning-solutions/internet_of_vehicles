@@ -1,53 +1,66 @@
-import tkinter as tk
-from tkinter import ttk
+import toga
+from toga.style import Pack
+from toga.style.pack import COLUMN, ROW
 import environment  # Assuming environment is a separate module
 
-def start_simulation(power_algo, channel_algo, mode, num_episodes):
-    try:
-        num_episodes = int(num_episodes)  # Ensure the input is converted to an integer
-        print(f"Simulating with Power: {power_algo}, Channel: {channel_algo}, Mode: {mode}, Episodes: {num_episodes}")
-        # Call the environment setup method with parameters from the GUI
-        environment.setup_environment(power_algo, channel_algo, mode, num_episodes)
-    except ValueError:
-        print("Number of episodes must be an integer.")
+class SimulationApp(toga.App):
+    def startup(self):
+        # Create the main window
+        self.main_window = toga.MainWindow(title='Simulation Control Panel')
 
-root = tk.Tk()
-root.title("Simulation Control Panel")
-root.geometry("400x300")  # Adjusted to fit new input field
+        # Power Allocation Algorithm
+        power_label = toga.Label('Power Allocation Algorithm:', style=Pack(padding=(0, 5)))
+        self.power_dropdown = toga.Selection(items=['Proportional', 'BLCA'], style=Pack(flex=1))
 
-# Use frames for better layout control
-frame = ttk.Frame(root, padding="10")
-frame.pack(fill='both', expand=True)
+        # Channel Allocation Algorithm
+        channel_label = toga.Label('Channel Allocation Algorithm:', style=Pack(padding=(0, 5)))
+        self.channel_dropdown = toga.Selection(items=['Stable', 'Greedy', 'WUA'], style=Pack(flex=1))
 
-# Create and place dropdowns for selecting algorithms and modes with labels
-power_var = tk.StringVar()
-channel_var = tk.StringVar()
-mode_var = tk.StringVar()
-episodes_var = tk.StringVar()  # Variable for number of episodes input
+        # Operation Mode
+        mode_label = toga.Label('Operation Mode:', style=Pack(padding=(0, 5)))
+        self.mode_dropdown = toga.Selection(items=['Indirect via Leader', 'Indirect without Leader', 'Direct'], style=Pack(flex=1))
 
-power_label = ttk.Label(frame, text="Power Allocation Algorithm:")
-power_label.pack(pady=(10, 0))  # Add some vertical padding for spacing
-power_dropdown = ttk.Combobox(frame, textvariable=power_var, values=['Proportional', 'BLCA'])
-power_dropdown.pack()
+        # Number of Episodes
+        episodes_label = toga.Label('Number of Episodes:', style=Pack(padding=(0, 5)))
+        self.episodes_input = toga.TextInput(placeholder='Enter number of episodes', style=Pack(flex=1))
 
-channel_label = ttk.Label(frame, text="Channel Allocation Algorithm:")
-channel_label.pack(pady=(10, 0))  # Add some vertical padding for spacing
-channel_dropdown = ttk.Combobox(frame, textvariable=channel_var, values=['Stable', 'Greedy', 'WUA'])
-channel_dropdown.pack()
+        # Start Simulation Button
+        start_button = toga.Button('Start Simulation', on_press=self.start_simulation, style=Pack(padding=10))
 
-mode_label = ttk.Label(frame, text="Operation Mode:")
-mode_label.pack(pady=(10, 0))  # Add some vertical padding for spacing
-mode_dropdown = ttk.Combobox(frame, textvariable=mode_var, values=['Indirect via Leader', 'Indirect without Leader', 'Direct'])
-mode_dropdown.pack()
+        # Arrange widgets in boxes
+        power_box = toga.Box(children=[power_label, self.power_dropdown], style=Pack(direction=ROW, padding=5))
+        channel_box = toga.Box(children=[channel_label, self.channel_dropdown], style=Pack(direction=ROW, padding=5))
+        mode_box = toga.Box(children=[mode_label, self.mode_dropdown], style=Pack(direction=ROW, padding=5))
+        episodes_box = toga.Box(children=[episodes_label, self.episodes_input], style=Pack(direction=ROW, padding=5))
 
-# Entry for number of episodes
-episodes_label = ttk.Label(frame, text="Number of Episodes:")
-episodes_label.pack(pady=(10, 0))
-episodes_entry = ttk.Entry(frame, textvariable=episodes_var)
-episodes_entry.pack()
+        # Main content box
+        content_box = toga.Box(
+            children=[power_box, channel_box, mode_box, episodes_box, start_button],
+            style=Pack(direction=COLUMN, padding=10)
+        )
 
-# Button to start the simulation
-start_button = ttk.Button(frame, text="Start Simulation", command=lambda: start_simulation(power_var.get(), channel_var.get(), mode_var.get(), episodes_var.get()))
-start_button.pack(pady=20)  # Add vertical padding to separate from dropdowns
+        # Set the content of the main window
+        self.main_window.content = content_box
+        self.main_window.show()
 
-root.mainloop()
+    def start_simulation(self, widget):
+        try:
+            # Retrieve values from inputs
+            power_algo = self.power_dropdown.value
+            channel_algo = self.channel_dropdown.value
+            mode = self.mode_dropdown.value
+            num_episodes = int(self.episodes_input.value)
+
+            print(f"Simulating with Power: {power_algo}, Channel: {channel_algo}, Mode: {mode}, Episodes: {num_episodes}")
+            # Call the environment setup method with parameters from the GUI
+            environment.setup_environment(power_algo, channel_algo, mode, num_episodes)
+        except ValueError:
+            # Show an alert dialog if the number of episodes is not an integer
+            self.main_window.error_dialog('Input Error', 'Number of episodes must be an integer.')
+
+def main():
+    return SimulationApp('Simulation Control Panel', 'org.example.simulation')
+
+if __name__ == '__main__':
+    app = SimulationApp('Simulation Control Panel', 'org.example.simulation')
+    app.main_loop()

@@ -6,12 +6,18 @@ authors = ["Your Name <you@example.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.12.1"
-torch = "^2.5.1"  
-numpy = "^1.22"
-pandas = "^2.2.3"
-matplotlib = "^3.5"
+python = "^3.11.10"
+# Add the platform-specific Toga backend
+toga-cocoa = { version = "^0.3.0.dev22" }  # Use the latest compatible version
+# Other dependencies
+torch = "^2.1.2"
+torchaudio = "^2.1.0"
+torchvision = "^0.16.0"
+transformers = "^4.31.0"
+matplotlib = "^3.7"
+numpy = "^1.21"
 vmas = "^1.4.3"
+pandas = "^2.2.3"
 
 [build-system]
 requires = ["poetry-core"]
