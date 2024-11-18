@@ -1,30 +1,91 @@
 #!/usr/bin/env bash
 
-# Function to check if Python is installed
-check_python() {
-    if ! command -v python3 &> /dev/null; then
-        echo "Python could not be found. Installing Python..."
-        install_python
+# Function to ensure pyenv is installed and initialized
+ensure_pyenv() {
+    if ! command -v pyenv &> /dev/null; then
+        echo "pyenv is not installed. Installing pyenv..."
+        install_pyenv
     else
-        local python_path=$(which python3)
-        echo "Python is installed at $python_path."
-        echo "Python version: $(python3 --version)"
+        echo "pyenv is already installed."
+    fi
+
+    # Initialize pyenv
+    export PYENV_ROOT="$HOME/.pyenv"
+    export PATH="$PYENV_ROOT/bin:$PATH"
+    if command -v pyenv &> /dev/null; then
+        eval "$(pyenv init -)"
     fi
 }
 
-# Function to install Python
-install_python() {
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        sudo apt-get update && sudo apt-get install -y python3.12 python3.12-tk
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # Assumes Homebrew is installed
-        brew install python@3.12
-        brew install tcl-tk
-    elif [[ "$OSTYPE" == "cygwin"* ]] || [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "win32" ]]; then
-        echo "Please install Python 3.12 with Tkinter manually from https://www.python.org/downloads/"
-        exit 1
+# Function to install pyenv
+install_pyenv() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # Install pyenv on macOS using Homebrew
+        brew update
+        brew install pyenv
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Install pyenv on Linux
+        curl https://pyenv.run | bash
     else
-        echo "Unsupported OS for automatic Python installation."
+        echo "Unsupported OS for automatic pyenv installation."
+        exit 1
+    fi
+
+    # Add pyenv to shell configuration
+    if [[ -n "$BASH_VERSION" ]]; then
+        echo 'export PYENV_ROOT="$HOME/.pyenv"' >> "$HOME/.bashrc"
+        echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> "$HOME/.bashrc"
+        echo 'eval "$(pyenv init -)"' >> "$HOME/.bashrc"
+    elif [[ -n "$ZSH_VERSION" ]]; then
+        echo 'export PYENV_ROOT="$HOME/.pyenv"' >> "$HOME/.zshrc"
+        echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> "$HOME/.zshrc"
+        echo 'eval "$(pyenv init -)"' >> "$HOME/.zshrc"
+    fi
+}
+
+# Function to check if Python 3.11.10 is installed via pyenv
+check_python() {
+    ensure_pyenv
+
+    if ! pyenv versions --bare | grep -q "^3.11.10$"; then
+        echo "Python 3.11.10 is not installed via pyenv. Installing..."
+        pyenv install 3.11.10
+    else
+        echo "Python 3.11.10 is already installed via pyenv."
+    fi
+
+    # Set Python 3.11.10 as the local version
+    pyenv local 3.11.10
+
+    # Ensure that 'python3' refers to pyenv's Python 3.11.10
+    if [[ "$(python3 --version 2>&1)" != "Python 3.11.10" ]]; then
+        echo "Setting pyenv's Python 3.11.10 as the default 'python3'"
+        ln -sf "$(pyenv which python)" "$PYENV_ROOT/shims/python3"
+    fi
+}
+
+# Function to check if Git is installed
+check_git() {
+    if ! command -v git &> /dev/null; then
+        echo "Git is not installed. Installing Git..."
+        install_git
+    else
+        echo "Git is already installed at $(which git)."
+        echo "Git version: $(git --version)"
+    fi
+}
+
+# Function to install Git
+install_git() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        echo "Installing Git on Linux..."
+        sudo apt-get update
+        sudo apt-get install -y git
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Installing Git on macOS..."
+        brew install git
+    else
+        echo "Unsupported OS for automatic Git installation."
         exit 1
     fi
 }
@@ -41,38 +102,23 @@ check_poetry() {
 
 # Function to install Poetry
 install_poetry() {
+    echo "Installing Poetry..."
     curl -sSL https://install.python-poetry.org | python3 -
     export PATH="$HOME/.local/bin:$PATH"
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> $HOME/.bashrc
+    # Add to shell configuration
+    if [[ -n "$BASH_VERSION" ]]; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    elif [[ -n "$ZSH_VERSION" ]]; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+    fi
 }
 
 # Function to install project dependencies
 install_dependencies() {
     echo "Installing dependencies..."
+    # Use the pyenv Python in the virtual environment
+    poetry env use "$(pyenv which python)"
     poetry install
-    check_virtual_environment
-}
-
-# Function to check and manage the virtual environment
-check_virtual_environment() {
-    local VENV_PATH=$(poetry env info -p 2>/dev/null)
-    local VENV_PYTHON_VERSION=$("$VENV_PATH/bin/python" --version 2>&1)
-    local SYSTEM_PYTHON_VERSION=$(python3 --version 2>&1)
-
-    if [[ -d "$VENV_PATH" ]]; then
-        if [[ "$VENV_PYTHON_VERSION" == "$SYSTEM_PYTHON_VERSION" ]]; then
-            echo "Virtual environment already exists and is using the correct Python version."
-        else
-            echo "Virtual environment exists but uses a different Python version. Recreating..."
-            poetry env remove python
-            poetry env use python3
-            poetry install
-        fi
-    else
-        echo "Creating virtual environment with the current Python version..."
-        poetry env use python3
-        poetry install
-    fi
 }
 
 # Function to run the main application
@@ -87,6 +133,7 @@ run_application() {
 
 # Main installation function
 main() {
+    check_git
     check_python
     check_poetry
     export PATH="$HOME/.local/bin:$PATH"
