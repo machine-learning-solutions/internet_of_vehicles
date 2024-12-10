@@ -200,7 +200,8 @@ class CarAgent(Agent):
         direction=None,
         safe_distance = 2,
         scenario = None,
-        rsus = None
+        rsus = None,
+        max_distance=10
         
     ):
         """
@@ -238,6 +239,7 @@ class CarAgent(Agent):
         self.scenario = scenario 
         self.rsus = rsus
         self.init_spacing()
+        self.max_distance = max_distance
    
     def init_spacing(self):
         # Ensure these match the dimensions used for visual rendering
@@ -323,37 +325,66 @@ class CarAgent(Agent):
         adjusted_y = np.clip(y, self.bottom_y, self.top_y)
         return adjusted_x, adjusted_y
 
-       
-    def stable_matching(self, agent, channels, preferences):
-        channel_rank = {}
-        for ch in channels:
-            if ch.frequency in preferences:
-                channel_rank[ch.frequency] = {ag: idx for idx, ag in enumerate(preferences[ch.frequency])}
-            else:
-                channel_rank[ch.frequency] = {agent: 0}  # default or error handling case
+    def calculate_preference(self,channel, rsu):
+            # Calculate distance to RSU and corresponding channel gain and SNR
+            distance = self.calculate_distance_to_rsu(rsu)
+            channel_gain = self.calculate_channel_gain(distance)
+            snr = self.calculate_snr(channel_gain)
+            workload = channel.get_current_load()  # Current load of the channel
 
-        proposals = {ag: deque(preferences[ag]) for ag in [agent]}
-        pairs = {}
-        free_agents = set([agent])
+            # Normalize SNR and distance
+            normalized_snr = snr / 100  # Normalize SNR to a scale of 0 to 1
+            normalized_distance = 1 - (distance / self.max_distance)  # Normalize distance
+
+            # Weight factors
+            weight_snr = 0.5
+            weight_distance = 0.3
+            weight_workload = 0.2
+
+            # Calculate the weighted preference score
+            preference_score = (weight_snr * normalized_snr +
+                                weight_distance * normalized_distance +
+                                weight_workload * (1 - workload))  # Lower workload is better
+
+            return preference_score
+       
+    def stable_matching(self, agent, rsu, channels):
+        """
+        Performs stable matching between an agent and available channels based on preference scores that
+        account for SNR, distance to an RSU, and channel workload.
+
+        Parameters:
+        - agent (CarAgent): The agent for whom to perform channel matching.
+        - rsu (RSU): The RSU related to the channels.
+        - channels (list of Channel objects): The available channels for matching.
         
-        while free_agents:
-            ag = free_agents.pop()
-            while proposals[ag]:
-                ch = proposals[ag].popleft()
-                if ch not in pairs:
-                    pairs[ch] = ag
+        Returns:
+        - dict: A dictionary mapping the chosen channel to the agent.
+        """
+
+        # Sort channels based on preference scores in descending order
+        preferences = sorted(channels, key=lambda channel: self.calculate_preference(channel, rsu), reverse=True)
+
+        proposals = deque(preferences)
+        pairs = {}
+
+        # Perform stable matching
+        while proposals:
+            channel = proposals.popleft()
+            if channel not in pairs:
+                pairs[channel] = agent
+                break
+            else:
+                current_agent = pairs[channel]
+                current_agent_pref = current_agent.calculate_preference(channel, rsu)
+                new_agent_pref = agent.calculate_preference(channel, rsu)
+                
+                if new_agent_pref > current_agent_pref:
+                    pairs[channel] = agent
                     break
-                else:
-                    current_agent = pairs[ch]
-                    if channel_rank[ch][ag] < channel_rank[ch][current_agent]:
-                        free_agents.add(current_agent)
-                        pairs[ch] = ag
-                        break
-                    else:
-                        if not proposals[ag]:
-                            free_agents.add(ag)
 
         return {ag: ch for ch, ag in pairs.items()}
+
 
 
     def greedy_subcarrier_allocation(self, agent, channels, data_rates):
@@ -375,15 +406,9 @@ class CarAgent(Agent):
 
         return allocation
 
-    def assign_channel(self, method, agent, channels, data=None):
+    def assign_channel(self, method, agent,rsu, channels, data=None):
         if method == 'Stable':
-            preferred_channel = next((c for c in channels if c.frequency == 2), None)
-            if preferred_channel:
-                other_channels = [c for c in channels if c != preferred_channel]
-                preferences = {agent: [preferred_channel] + other_channels}
-            else:
-                preferences = {agent: channels}
-            allocation = self.stable_matching(agent, channels, preferences)
+            allocation = self.stable_matching(agent, rsu, channels)
         elif method == 'Greedy':
             allocation = self.greedy_subcarrier_allocation(agent, channels, data)
         elif method == 'WUA':
@@ -392,6 +417,7 @@ class CarAgent(Agent):
             raise ValueError("Invalid method. Must be one of 'stable', 'greedy', or 'wua'.")
 
         self.assigned_channel = allocation[agent]
+
     
     def proportional_fair_allocation(self, agent):
         # Calculate priority based on inverse of current SNR
@@ -618,7 +644,6 @@ class CarAgent(Agent):
         else:
             # Handle zero or invalid distance
             channel_gain = max_gain
-            logging.warning(f"Agent {self.name}: Invalid distance ({distance}). Assigning max_gain ({max_gain}).")
         
         self.channel_gain = channel_gain
         return channel_gain
@@ -984,9 +1009,9 @@ class IoVScenario(BaseScenario):
                 info_text = (
                     f"{agent.name}: G {agent.channel_gain:.2f}, "
                     f"SNR {agent.snr:.2f} dB, Rate {agent.rate:.2f} Mbps, "
-                    f"D {agent.distance:.2f} m, "
-                    f"P {power_value} W, Ch {agent.assigned_channel.frequency} GHz, "
-                    f"M: {agent.transmission_mode}"
+                    f"D-RSU {agent.distance:.2f} m, "
+                    f"P {power_value} Watts, Ch {agent.assigned_channel.frequency} GHz, "
+                    f"Mode: {agent.transmission_mode}"
                 )
                     
                 # Create text geometry
@@ -1019,7 +1044,7 @@ class IoVScenario(BaseScenario):
                 end=(center_x, end_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0,0,0)  # Gray color
+            dash.set_color(0.5, 0.5, 0.5)  # Gray color
             geoms.append(dash)
     
         # Downward direction (negative y-axis)
@@ -1035,7 +1060,7 @@ class IoVScenario(BaseScenario):
                 end=(center_x, end_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0,0,0)
+            dash.set_color(0.5, 0.5, 0.5)
             geoms.append(dash)
     
         # Rightward direction (positive x-axis)
@@ -1051,7 +1076,7 @@ class IoVScenario(BaseScenario):
                 end=(end_x, center_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0,0,0)
+            dash.set_color(0.5, 0.5, 0.5)
             geoms.append(dash)
     
         # Leftward direction (negative x-axis)
@@ -1067,7 +1092,7 @@ class IoVScenario(BaseScenario):
                 end=(end_x, center_y)
             )
             dash.set_linewidth(road_width)
-            dash.set_color(0,0,0)
+            dash.set_color(0.5, 0.5, 0.5)
             geoms.append(dash)
     
         # RSU at top-left corner
@@ -1200,19 +1225,13 @@ class IoVEnvironment:
         for agent, action in zip(self.environment.scenario.agents, actions):
             agent.speed = action  # Assuming each action represents a new speed
 
-        # Initialize priorities, weights, and gain_matrix for the power allocation algorithm
-        priorities = [channel.priority for channel in self.channels]  # Replace with actual priority values
-        weights = [channel.get_current_load() for channel in self.channels]  # Example method to determine current load
-        gain_matrix = {(u.name, c): u.calculate_channel_gain(u.calculate_distance_to_rsu(self.rsus[0])) for u in self.scenario.agents for c in self.channels}
-        max_power = 1
-        
         for agent in self.scenario.agents:
             for rsu in self.rsus:
                 if rsu.is_within_coverage(agent.position):
                     # Prepare data for the 'greedy' method
                     data_rates = {(a, c): a.calculate_rate(a.calculate_snr(a.calculate_channel_gain(a.calculate_distance_to_rsu(rsu)))) for a in self.scenario.agents for c in self.channels}
                     
-                    agent.assign_channel(channel_mode, agent, self.channels, data_rates)
+                    agent.assign_channel(channel_mode, agent, rsu, self.channels, data_rates)
                     
                     if agent.leader:
                         agent.follow_leader()
